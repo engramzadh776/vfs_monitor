@@ -8,6 +8,7 @@ import os
 import logging
 from datetime import datetime
 import schedule
+import random
 
 # লগিং কনফিগারেশন
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,12 +21,20 @@ VFS_USERNAME = os.getenv('VFS_USERNAME')
 VFS_PASSWORD = os.getenv('VFS_PASSWORD')
 VFS_LOGIN_URL = os.getenv('VFS_LOGIN_URL', 'https://visa.vfsglobal.com/sgp/en/prt/login')
 VFS_APPOINTMENT_URL = os.getenv('VFS_APPOINTMENT_URL', 'https://visa.vfsglobal.com/sgp/en/prt/book-appointment')
-CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '10'))
+CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '30'))  # Increased to 30 minutes
 
 # VFS কনফিগারেশন
 APPLICATION_CENTRE = 'Portugal Visa Application Center, Singapore'
 CATEGORY = 'DP Job Seeker'
 SUB_CATEGORY = 'T1 Job Seeker Visa'
+
+# User-Agent list for rotation
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+]
 
 # টেলিগ্রাম বট ইনিশিয়ালাইজ
 if TELEGRAM_BOT_TOKEN:
@@ -34,16 +43,39 @@ else:
     bot = None
     logger.warning("Telegram bot token not set")
 
+def get_random_headers():
+    """Random headers তৈরি করার ফাংশন"""
+    return {
+        'User-Agent': random.choice(USER_AGENTS),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0'
+    }
+
 def login_to_vfs():
     """VFS Global এ লগইন করার ফাংশন"""
     try:
         session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
+        session.headers.update(get_random_headers())
+        
+        # Random delay add করুন
+        time.sleep(random.uniform(2, 5))
         
         logger.info("Loading login page...")
         response = session.get(VFS_LOGIN_URL, timeout=30)
+        
+        # 403 error check করুন
+        if response.status_code == 403:
+            logger.error("403 Forbidden Error - VFS is blocking our requests")
+            return None
+            
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -65,11 +97,22 @@ def login_to_vfs():
         if csrf_token:
             login_data['_csrf'] = csrf_token
         
+        # Additional headers for POST request
+        post_headers = get_random_headers()
+        post_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        post_headers['Referer'] = VFS_LOGIN_URL
+        
         # লগইন request
         logger.info("Sending login request...")
-        login_response = session.post(VFS_LOGIN_URL, data=login_data, timeout=30)
+        time.sleep(random.uniform(3, 6))  # Random delay
         
-        if login_response.status_code == 200:
+        login_response = session.post(VFS_LOGIN_URL, data=login_data, headers=post_headers, timeout=30)
+        
+        if login_response.status_code == 403:
+            logger.error("403 Forbidden Error during login")
+            return None
+            
+        if login_response.status_code == 200 and (VFS_USERNAME in login_response.text or "dashboard" in login_response.url):
             logger.info("Login successful")
             return session
         else:
@@ -83,8 +126,18 @@ def login_to_vfs():
 def check_appointment_slots(session):
     """এপয়েন্টমেন্ট স্লট চেক করার ফাংশন"""
     try:
+        if not session:
+            return False
+            
         logger.info("Checking appointment slots...")
+        time.sleep(random.uniform(2, 4))
+        
         response = session.get(VFS_APPOINTMENT_URL, timeout=30)
+        
+        if response.status_code == 403:
+            logger.error("403 Forbidden Error - Cannot access appointment page")
+            return False
+            
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -96,8 +149,19 @@ def check_appointment_slots(session):
             'subCategory': SUB_CATEGORY
         }
         
+        # Additional headers for POST request
+        post_headers = get_random_headers()
+        post_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        post_headers['Referer'] = VFS_APPOINTMENT_URL
+        
         # ফর্ম submit
-        appointment_response = session.post(VFS_APPOINTMENT_URL, data=form_data, timeout=30)
+        time.sleep(random.uniform(3, 5))
+        appointment_response = session.post(VFS_APPOINTMENT_URL, data=form_data, headers=post_headers, timeout=30)
+        
+        if appointment_response.status_code == 403:
+            logger.error("403 Forbidden Error - Cannot submit appointment form")
+            return False
+            
         appointment_response.raise_for_status()
         
         appointment_soup = BeautifulSoup(appointment_response.content, 'html.parser')
