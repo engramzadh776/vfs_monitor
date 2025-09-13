@@ -1,48 +1,24 @@
 # VFS Global Slot Monitor
 
-This Python script automatically checks for available appointment slots on VFS Global website and sends Telegram notifications when slots are available.
+এই Python script টি স্বয়ংক্রিয়ভাবে VFS Global ওয়েবসাইটে Portugal Job Seeker Visa এর জন্য available appointment slots check করে এবং Telegram-এ notification পাঠায়।
 
 ## Features
 
-- Automatically checks VFS Global every 10 minutes
-- Sends instant Telegram notifications when slots are available
-- Runs 24/7 on Railway
+- ✅ Automatic login to VFS Global
+- ✅ Appointment slot availability check
+- ✅ Telegram notifications
+- ✅ Railway deployment support
+- ✅ Error handling and logging
 
 ## Setup
 
-1. **Fork this repository** on GitHub
-2. **Create a Railway account** at [railway.app](https://railway.app)
-3. **Connect your GitHub repository** to Railway
-4. **Set environment variables** in Railway dashboard:
+### 1. Railway Environment Variables
 
-## Environment Variables
+নিচের environment variables গুলি Railway dashboard এ set করুন:
 
-Set these in Railway dashboard:
-
-- `TELEGRAM_BOT_TOKEN` - Your Telegram bot token from @BotFather
-- `TELEGRAM_CHAT_ID` - Your Telegram chat ID (use @userinfobot to get it)
-- `VFS_USERNAME` - Your VFS Global account email
-- `VFS_PASSWORD` - Your VFS Global account password
-- `VFS_LOGIN_URL` - VFS login URL (default: https://visa.vfsglobal.com/sgp/en/prt/login)
-- `VFS_APPOINTMENT_URL` - VFS appointment URL (default: https://visa.vfsglobal.com/sgp/en/prt/book-appointment)
-- `CHECK_INTERVAL` - Check interval in minutes (default: 10)
-
-## Telegram Bot Setup
-
-1. Message @BotFather on Telegram
-2. Create a new bot with `/newbot` command
-3. Copy the bot token
-4. Add the bot to a chat and get chat ID using @userinfobot
-
-## Configuration
-
-The script is configured for:
-- Application Centre: Portugal Visa Application Center, Singapore
-- Category: DP Job Seeker  
-- Sub-Category: T1 Job Seeker Visa
-
-## Notes
-
-- The script runs continuously on Railway
-- Check interval can be adjusted with CHECK_INTERVAL variable
-- Notifications are sent only when slots become available
+```bash
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_chat_id_here
+VFS_EMAIL=your_vfs_email@example.com
+VFS_PASSWORD=your_vfs_password_here
+CHECK_INTERVAL=30
