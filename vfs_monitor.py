@@ -9,8 +9,7 @@ import logging
 from datetime import datetime
 import schedule
 import random
-import cloudscraper
-from urllib.parse import urljoin
+import re
 
 # লগিং কনফিগারেশন
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,18 +20,14 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 VFS_USERNAME = os.getenv('VFS_USERNAME')
 VFS_PASSWORD = os.getenv('VFS_PASSWORD')
-VFS_BASE_URL = os.getenv('VFS_BASE_URL', 'https://visa.vfsglobal.com/sgp/en/prt/')
-CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '45'))  # 45 minutes to avoid blocking
+CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # 60 minutes
 
-# VFS কনফিগারেশন
-APPLICATION_CENTRE = 'Portugal Visa Application Center, Singapore'
-CATEGORY = 'DP Job Seeker'
-SUB_CATEGORY = 'T1 Job Seeker Visa'
-
-# URLs
-VFS_LOGIN_URL = urljoin(VFS_BASE_URL, 'login')
-VFS_APPOINTMENT_URL = urljoin(VFS_BASE_URL, 'book-appointment')
-VFS_DASHBOARD_URL = urljoin(VFS_BASE_URL, 'dashboard')
+# VFS Base URLs (multiple possible endpoints)
+VFS_BASE_URLS = [
+    'https://visa.vfsglobal.com/sgp/en/prt/',
+    'https://www.vfsglobal.com/portugal/singapore/',
+    'https://portugal.vfsglobal.com/sgp/'
+]
 
 # টেলিগ্রাম বট ইনিশিয়ালাইজ
 if TELEGRAM_BOT_TOKEN:
@@ -41,87 +36,91 @@ else:
     bot = None
     logger.warning("Telegram bot token not set")
 
-def create_scraper():
-    """Cloudflare bypass সহ scraper তৈরি করুন"""
-    try:
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'mobile': False
-            }
-        )
-        return scraper
-    except Exception as e:
-        logger.warning(f"Cloudscraper init failed, using requests: {e}")
-        return requests.Session()
-
-def get_realistic_headers():
-    """Realistic browser headers তৈরি করুন"""
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-    ]
+def discover_vfs_urls():
+    """Automatically discover correct VFS URLs"""
+    logger.info("Discovering correct VFS URLs...")
     
-    return {
-        'User-Agent': random.choice(user_agents),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'same-origin',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
-        'Referer': VFS_BASE_URL
-    }
-
-def simulate_human_behavior():
-    """Human-like random delays"""
-    time.sleep(random.uniform(3, 8))
-    time.sleep(random.uniform(1, 3))
-
-def login_to_vfs():
-    """VFS Global এ লগইন করার ফাংশন"""
-    try:
-        # Cloudflare bypass সহ scraper ব্যবহার করুন
-        session = create_scraper()
-        headers = get_realistic_headers()
-        
-        # First, visit homepage to get cookies
-        logger.info("Visiting homepage for cookies...")
-        simulate_human_behavior()
-        
-        home_response = session.get(VFS_BASE_URL, headers=headers, timeout=30)
-        if home_response.status_code != 200:
-            logger.error(f"Homepage access failed: {home_response.status_code}")
-            return None
-        
-        # Now visit login page
-        logger.info("Loading login page...")
-        simulate_human_behavior()
-        
-        headers['Referer'] = VFS_BASE_URL
-        response = session.get(VFS_LOGIN_URL, headers=headers, timeout=30)
-        
-        if response.status_code == 403:
-            logger.error("403 Forbidden - VFS is blocking automated requests")
-            return None
+    for base_url in VFS_BASE_URLS:
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
             
+            response = requests.get(base_url, headers=headers, timeout=30, allow_redirects=True)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Find login links
+                login_links = []
+                for link in soup.find_all('a', href=True):
+                    href = link['href'].lower()
+                    if any(x in href for x in ['login', 'signin', 'account', 'auth']):
+                        if href.startswith('http'):
+                            login_links.append(href)
+                        else:
+                            login_links.append(base_url.rstrip('/') + '/' + href.lstrip('/'))
+                
+                # Find appointment links
+                appointment_links = []
+                for link in soup.find_all('a', href=True):
+                    href = link['href'].lower()
+                    if any(x in href for x in ['appointment', 'booking', 'schedule', 'book-now']):
+                        if href.startswith('http'):
+                            appointment_links.append(href)
+                        else:
+                            appointment_links.append(base_url.rstrip('/') + '/' + href.lstrip('/'))
+                
+                if login_links or appointment_links:
+                    logger.info(f"Found working base URL: {base_url}")
+                    return base_url, login_links[0] if login_links else None, appointment_links[0] if appointment_links else None
+                    
+        except Exception as e:
+            logger.warning(f"URL {base_url} failed: {str(e)}")
+            continue
+    
+    return None, None, None
+
+def get_authenticated_session():
+    """Get authenticated session with correct URLs"""
+    base_url, login_url, appointment_url = discover_vfs_urls()
+    
+    if not base_url:
+        logger.error("Could not discover any working VFS URLs")
+        return None, None, None
+    
+    # Use discovered URLs or fallback to constructed URLs
+    login_url = login_url or f"{base_url.rstrip('/')}/login"
+    appointment_url = appointment_url or f"{base_url.rstrip('/')}/book-appointment"
+    
+    logger.info(f"Using Login URL: {login_url}")
+    logger.info(f"Using Appointment URL: {appointment_url}")
+    
+    try:
+        session = requests.Session()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        
+        # First get the login page to collect cookies and CSRF token
+        logger.info("Fetching login page...")
+        response = session.get(login_url, headers=headers, timeout=30)
+        
         if response.status_code != 200:
-            logger.error(f"Login page failed: {response.status_code}")
-            return None
+            logger.error(f"Login page returned status: {response.status_code}")
+            return None, None, None
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Find all possible CSRF tokens
-        csrf_tokens = {}
-        for input_tag in soup.find_all('input'):
-            if input_tag.get('name') and ('csrf' in input_tag.get('name').lower() or '_token' in input_tag.get('name')):
-                csrf_tokens[input_tag.get('name')] = input_tag.get('value', '')
+        # Find CSRF token
+        csrf_token = None
+        for input_name in ['_csrf', 'csrf_token', 'csrf', 'authenticity_token', 'token']:
+            input_field = soup.find('input', {'name': input_name})
+            if input_field:
+                csrf_token = input_field.get('value')
+                break
         
         # Prepare login data
         login_data = {
@@ -129,48 +128,52 @@ def login_to_vfs():
             'password': VFS_PASSWORD
         }
         
-        # Add all found CSRF tokens
-        login_data.update(csrf_tokens)
+        if csrf_token:
+            login_data['_csrf'] = csrf_token
         
-        # Login request
-        logger.info("Sending login request...")
-        simulate_human_behavior()
+        # Add other possible hidden fields
+        for hidden_field in soup.find_all('input', {'type': 'hidden'}):
+            if hidden_field.get('name') and hidden_field.get('value'):
+                login_data[hidden_field.get('name')] = hidden_field.get('value')
         
-        headers['Referer'] = VFS_LOGIN_URL
+        # Submit login form
+        logger.info("Submitting login form...")
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        headers['Referer'] = login_url
         
-        login_response = session.post(VFS_LOGIN_URL, data=login_data, headers=headers, timeout=30)
+        login_response = session.post(login_url, data=login_data, headers=headers, timeout=30)
         
-        # Check if login successful
         if login_response.status_code == 200:
-            if "dashboard" in login_response.url or "myaccount" in login_response.url:
-                logger.info("Login successful")
-                return session
+            # Check if login was successful by looking for dashboard elements
+            if any(x in login_response.text.lower() for x in ['dashboard', 'welcome', 'my account', 'logout']):
+                logger.info("Login successful!")
+                return session, login_url, appointment_url
             else:
                 logger.error("Login failed - redirect not to dashboard")
-                return None
+                return None, None, None
         else:
             logger.error(f"Login failed with status: {login_response.status_code}")
-            return None
+            return None, None, None
             
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
-        return None
+        return None, None, None
 
-def check_appointment_slots(session):
+def check_appointment_slots(session, appointment_url):
     """এপয়েন্টমেন্ট স্লট চেক করার ফাংশন"""
+    if not session or not appointment_url:
+        return False
+        
     try:
-        if not session:
-            return False
-            
         logger.info("Checking appointment slots...")
-        simulate_human_behavior()
         
-        headers = get_realistic_headers()
-        headers['Referer'] = VFS_LOGIN_URL
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': appointment_url
+        }
         
-        # First visit appointment page
-        response = session.get(VFS_APPOINTMENT_URL, headers=headers, timeout=30)
+        # Visit appointment page
+        response = session.get(appointment_url, headers=headers, timeout=30)
         
         if response.status_code != 200:
             logger.error(f"Appointment page failed: {response.status_code}")
@@ -178,42 +181,41 @@ def check_appointment_slots(session):
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Find all form inputs
-        form_data = {}
-        for input_tag in soup.find_all('input'):
-            if input_tag.get('name') and input_tag.get('value'):
-                form_data[input_tag.get('name')] = input_tag.get('value')
+        # Look for Portugal-specific options
+        portugal_centers = []
+        for option in soup.find_all('option'):
+            if 'portugal' in option.get_text().lower() or 'singapore' in option.get_text().lower():
+                portugal_centers.append(option.get('value'))
         
-        # Add our selections
-        form_data.update({
-            'applicationCentre': APPLICATION_CENTRE,
-            'category': CATEGORY,
-            'subCategory': SUB_CATEGORY
-        })
+        if not portugal_centers:
+            logger.error("Could not find Portugal visa center options")
+            return False
+        
+        # Prepare form data
+        form_data = {
+            'applicationCentre': portugal_centers[0],
+            'category': 'DP Job Seeker',
+            'subCategory': 'T1 Job Seeker Visa'
+        }
         
         # Submit form
-        simulate_human_behavior()
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        response = session.post(appointment_url, data=form_data, headers=headers, timeout=30)
         
-        headers['Referer'] = VFS_APPOINTMENT_URL
-        appointment_response = session.post(VFS_APPOINTMENT_URL, data=form_data, headers=headers, timeout=30)
-        
-        if appointment_response.status_code != 200:
-            logger.error(f"Appointment form failed: {appointment_response.status_code}")
-            return False
-        
-        appointment_soup = BeautifulSoup(appointment_response.content, 'html.parser')
-        
-        # Check for slots
-        page_text = appointment_soup.get_text().lower()
-        
-        if "no appointment slots are currently available" in page_text:
-            logger.info("No slots available")
-            return False
-        elif "select time" in page_text or "available dates" in page_text:
-            logger.info("SLOTS AVAILABLE!")
-            return True
+        if response.status_code == 200:
+            page_text = response.text.lower()
+            
+            if "no appointment slots are currently available" in page_text:
+                logger.info("No slots available")
+                return False
+            elif "select time" in page_text or "available dates" in page_text or "choose date" in page_text:
+                logger.info("SLOTS AVAILABLE!")
+                return True
+            else:
+                logger.warning("Cannot determine slot status")
+                return False
         else:
-            logger.warning("Cannot determine slot status from page content")
+            logger.error(f"Appointment form failed: {response.status_code}")
             return False
             
     except Exception as e:
@@ -235,24 +237,31 @@ def job():
     """মূল job ফাংশন"""
     logger.info("Starting VFS slot check...")
     
-    session = login_to_vfs()
+    session, login_url, appointment_url = get_authenticated_session()
     
-    if session:
-        slots_available = check_appointment_slots(session)
+    if session and appointment_url:
+        slots_available = check_appointment_slots(session, appointment_url)
         
         if slots_available:
             message = "🎉 URGENT: VFS SLOTS AVAILABLE!\n\n"
-            message += f"Center: {APPLICATION_CENTRE}\n"
-            message += f"Category: {CATEGORY}\n"
-            message += f"Sub-Category: {SUB_CATEGORY}\n"
             message += f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            message += f"Login quickly: {VFS_LOGIN_URL}"
+            message += f"Login quickly: {login_url}"
             
             send_telegram_notification(message)
         else:
             logger.info("No slots found, will check again later")
     else:
         logger.error("Login failed - skipping slot check")
+        
+        # Send error notification once per day to avoid spam
+        current_hour = datetime.now().hour
+        if current_hour == 12:  # Only send at 12 PM
+            message = "⚠️ VFS Monitor Error\n\n"
+            message += "The automated system cannot login to VFS.\n"
+            message += "Please check if URLs have changed or website is down.\n\n"
+            message += "Next check in 60 minutes."
+            
+            send_telegram_notification(message)
 
 def main():
     """মেইন ফাংশন"""
